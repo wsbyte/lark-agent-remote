@@ -34,7 +34,25 @@ curl -fsSL https://antigravity.google/cli/install.sh | bash
 agy
 ```
 
-After onboarding, open the bot settings and switch the engine to Antigravity. The bridge discovers available models dynamically, streams progress into the task card, persists independent Antigravity conversation IDs, and can resume recent desktop/CLI history exposed by the official conversation cache.
+After onboarding, open the bot settings and switch the engine to Antigravity. The bridge discovers available models dynamically, streams progress into the task card, persists independent Antigravity conversation IDs, and can resume recent CLI conversations that exist locally.
+
+### Proxy configuration
+
+Proxy use is optional. During `setup` or `install`, the bridge checks the current macOS HTTPS proxy and writes it into the launchd service only when one is enabled. This is useful for `agy`, which may not reliably inherit GUI/TUN routing in a background process.
+
+To explicitly configure a proxy instead of using auto-detection:
+
+```bash
+LARK_AGENT_REMOTE_PROXY=http://127.0.0.1:7897 lark-agent-remote install
+```
+
+To explicitly disable proxy injection, even when the macOS system proxy is enabled:
+
+```bash
+LARK_AGENT_REMOTE_PROXY=none lark-agent-remote install
+```
+
+The proxy value is captured when the service is installed. Run `install` again after changing it. `127.0.0.1`, `localhost`, and `::1` are always excluded so local Codex and Antigravity helper services continue to connect directly.
 
 ## Images and files
 

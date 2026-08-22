@@ -11,7 +11,8 @@ export async function installLaunchd() {
   const entry = resolve(dirname(fileURLToPath(import.meta.url)), '../bin/lark-agent-remote.js');
   chmodSync(entry, 0o755);
   mkdirSync(dirname(PLIST), { recursive: true });
-  const proxy = process.env.LARK_AGENT_REMOTE_PROXY || await systemProxyUrl();
+  const proxySetting = process.env.LARK_AGENT_REMOTE_PROXY;
+  const proxy = proxySetting?.toLowerCase() === 'none' ? '' : (proxySetting || await systemProxyUrl());
   const proxyEnvironment = proxy ? `<key>HTTP_PROXY</key><string>${escapeXml(proxy)}</string>
 <key>HTTPS_PROXY</key><string>${escapeXml(proxy)}</string>
 <key>http_proxy</key><string>${escapeXml(proxy)}</string>
