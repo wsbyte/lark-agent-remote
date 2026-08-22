@@ -80,7 +80,10 @@ export async function startBridge() {
       return;
     }
     const agentPrompt = withAttachmentContext(text, attachments);
-    const initialCard = taskCard({ state: 'running', prompt: text, config, taskKey: key });
+    // Freeze settings for the lifetime of this task. A settings-card change
+    // must only affect subsequent tasks, not mutate an in-flight execution.
+    const taskConfig = { ...config };
+    const initialCard = taskCard({ state: 'running', prompt: text, config: taskConfig, taskKey: key });
     const sent = await replyCard(event.message_id, initialCard);
     const taskMessageId = sent.message_id || sent.messageId || '';
     const controller = new AbortController();
@@ -93,7 +96,7 @@ export async function startBridge() {
       if (!taskMessageId || now - lastCardUpdateAt < 2500) return;
       lastCardUpdateAt = now;
       cardUpdateChain = cardUpdateChain
-        .then(() => updateMessageCard(taskMessageId, taskCard({ state: 'running', prompt: text, progress: message, config, taskKey: key })))
+        .then(() => updateMessageCard(taskMessageId, taskCard({ state: 'running', prompt: text, progress: message, config: taskConfig, taskKey: key })))
         .catch((error) => log(`card update ${error.message}`));
       await cardUpdateChain;
     };
@@ -101,27 +104,27 @@ export async function startBridge() {
     try {
       const common = {
         prompt: agentPrompt,
-        cwd: config.workspace,
-        model: config.model,
-        permission: config.permission,
-        effort: config.effort,
+        cwd: taskConfig.workspace,
+        model: taskConfig.model,
+        permission: taskConfig.permission,
+        effort: taskConfig.effort,
         signal: controller.signal,
         onProgress: (message) => { void updateProgress(message); },
       };
-      const result = config.engine === 'antigravity'
+      const result = taskConfig.engine === 'antigravity'
         ? await runAntigravityTurn({ ...common, conversationId: session.antigravityConversationId })
         : await runCodexTurn({ ...common, threadId: session.codexThreadId });
       config.conversations[key] = {
         ...session,
-        ...(config.engine === 'antigravity'
+        ...(taskConfig.engine === 'antigravity'
           ? { antigravityConversationId: result.conversationId }
           : { codexThreadId: result.threadId }),
         updatedAt: new Date().toISOString(),
       };
       saveConfig(config);
       const duration = formatDuration(Date.now() - startedAt);
-      const outgoing = extractOutgoingFiles(result.answer, config.workspace);
-      const completed = taskCard({ state: 'completed', prompt: text, answer: outgoing.answer, config, duration });
+      const outgoing = extractOutgoingFiles(result.answer, taskConfig.workspace);
+      const completed = taskCard({ state: 'completed', prompt: text, answer: outgoing.answer, config: taskConfig, duration });
       await cardUpdateChain;
       if (taskMessageId) await updateMessageCard(taskMessageId, completed);
       else await replyCard(event.message_id, completed);
@@ -132,7 +135,7 @@ export async function startBridge() {
     } catch (error) {
       log(`${key} error ${error.stack || error.message}`);
       const cancelled = error?.code === 'cancelled' || controller.signal.aborted;
-      const failed = taskCard({ state: cancelled ? 'cancelled' : 'failed', prompt: text, answer: cancelled ? '任务已停止。' : friendlyError(error), config, duration: formatDuration(Date.now() - startedAt) });
+      const failed = taskCard({ state: cancelled ? 'cancelled' : 'failed', prompt: text, answer: cancelled ? '任务已停止。' : friendlyError(error), config: taskConfig, duration: formatDuration(Date.now() - startedAt) });
       await cardUpdateChain;
       if (taskMessageId) await updateMessageCard(taskMessageId, failed);
       else await replyCard(event.message_id, failed);
@@ -148,6 +151,8 @@ export async function startBridge() {
     const selected = event?.option || event?.action?.option;
     if (value.action === 'engine') {
       if (value.value === 'antigravity' && !availability.antigravity) return;
+      const task = activeTasks.get(event.chat_id);
+      if (task) task.controller.abort();
       config.engine = value.value;
       config.model = '';
     } else if (value.action === 'model') {
