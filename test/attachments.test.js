@@ -7,6 +7,8 @@ import { extractOutgoingFiles, messageText, withAttachmentContext } from '../src
 
 test('normalizes text and attachment-only messages', () => {
   assert.equal(messageText({ message_type: 'text', content: JSON.stringify({ text: ' hello ' }) }), 'hello');
+  assert.equal(messageText({ message_type: 'post', content: '帮我生成一个 test.txt' }), '帮我生成一个 test.txt');
+  assert.equal(messageText({ message_type: 'post', content: JSON.stringify({ zh_cn: { title: '', content: [[{ tag: 'md', text: '引用内容' }]] } }) }), '引用内容');
   assert.equal(messageText({ message_type: 'image', content: JSON.stringify({ image_key: 'img_x' }) }), '请分析这张图片。');
 });
 

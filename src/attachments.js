@@ -78,7 +78,11 @@ function parseContent(value) {
 }
 
 function extractPostText(content) {
+  // lark-cli may normalize a post/markdown message to { text: "..." }
+  // instead of preserving Feishu's localized rich-text tree.
+  if (typeof content?.text === 'string') return content.text;
   const localized = content.zh_cn || content.en_us || Object.values(content)[0] || content;
+  if (typeof localized === 'string') return localized;
   const rows = Array.isArray(localized?.content) ? localized.content : [];
   return [localized?.title || '', ...rows.flat().map((item) => item?.text || '')].filter(Boolean).join('\n');
 }
