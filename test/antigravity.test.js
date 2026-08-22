@@ -3,7 +3,13 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { listAntigravitySessions } from '../src/antigravity.js';
+import { antigravityEffortFromModel, antigravityModelForEffort, listAntigravitySessions } from '../src/antigravity.js';
+
+test('keeps Antigravity model variants aligned with reasoning effort', () => {
+  assert.equal(antigravityModelForEffort('gemini-3.7-flash-high', 'low'), 'gemini-3.7-flash-low');
+  assert.equal(antigravityEffortFromModel('gemini-3.7-flash-medium'), 'medium');
+  assert.equal(antigravityModelForEffort('claude-sonnet-4-6', 'high'), 'claude-sonnet-4-6');
+});
 
 test('lists recent non-internal Antigravity sessions from the official cache', () => {
   const root = mkdtempSync(join(tmpdir(), 'agy-sessions-'));

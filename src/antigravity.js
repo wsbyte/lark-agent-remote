@@ -21,6 +21,15 @@ export async function listAntigravityModels() {
   });
 }
 
+export function antigravityModelForEffort(model, effort) {
+  if (!model || !effort) return model;
+  return model.replace(/-(?:low|medium|high)$/i, `-${effort}`);
+}
+
+export function antigravityEffortFromModel(model) {
+  return model?.match(/-(low|medium|high)$/i)?.[1]?.toLowerCase() || '';
+}
+
 export function listAntigravitySessions({ limit = 15, cachePath = CONVERSATION_CACHE } = {}) {
   if (!existsSync(cachePath)) return [];
   try {
@@ -57,8 +66,11 @@ export async function runAntigravityTurn(options) {
 function runAntigravityTurnOnce({ prompt, cwd, model, permission, effort, conversationId, onProgress, signal }) {
   const args = ['-p', prompt, '--output-format', 'stream-json', '--print-timeout', '30m'];
   if (conversationId) args.push('--conversation', conversationId);
-  if (model) args.push('--model', model);
-  if (effort) args.push('--effort', effort);
+  const resolvedModel = antigravityModelForEffort(model, effort);
+  if (resolvedModel) args.push('--model', resolvedModel);
+  // Some official model IDs already encode their effort. Passing both flags
+  // makes agy reject an otherwise valid selection as conflicting.
+  if (effort && !antigravityEffortFromModel(resolvedModel)) args.push('--effort', effort);
   if (permission === 'read-only') args.push('--sandbox');
   if (permission === 'workspace-write') args.push('--sandbox', '--mode', 'accept-edits');
   if (permission === 'danger-full-access') args.push('--mode', 'accept-edits', '--dangerously-skip-permissions');

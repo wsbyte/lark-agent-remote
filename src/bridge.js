@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { configCard, fullAccessConfirmationCard, historyCard, taskCard } from './cards.js';
-import { listAntigravityModels, listAntigravitySessions, runAntigravityTurn } from './antigravity.js';
+import { antigravityEffortFromModel, antigravityModelForEffort, listAntigravityModels, listAntigravitySessions, runAntigravityTurn } from './antigravity.js';
 import { cleanupOldAttachments, extractOutgoingFiles, messageText, receiveAttachments, sendOutgoingFiles, withAttachmentContext } from './attachments.js';
 import { loadConfig, LOG_PATH, saveConfig } from './config.js';
 import { listCodexModels, runCodexTurn } from './codex.js';
@@ -152,8 +152,10 @@ export async function startBridge() {
       config.model = '';
     } else if (value.action === 'model') {
       config.model = selected === '(inherit Codex default)' ? '' : selected;
+      if (config.engine === 'antigravity') config.effort = antigravityEffortFromModel(config.model) || config.effort;
     } else if (value.action === 'effort') {
       config.effort = value.value;
+      if (config.engine === 'antigravity') config.model = antigravityModelForEffort(config.model, config.effort);
     } else if (value.action === 'permission') {
       if (value.value === 'danger-full-access') {
         if (event.token) await updateCallbackCard(event.token, fullAccessConfirmationCard(config), operator);
