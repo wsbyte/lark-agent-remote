@@ -1,0 +1,32 @@
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { run } from './process.js';
+
+const LABEL = 'io.wsbyte.lark-agent-remote';
+const PLIST = `${homedir()}/Library/LaunchAgents/${LABEL}.plist`;
+
+export async function installLaunchd() {
+  const entry = resolve(dirname(fileURLToPath(import.meta.url)), '../bin/lark-agent-remote.js');
+  chmodSync(entry, 0o755);
+  mkdirSync(dirname(PLIST), { recursive: true });
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>${LABEL}</string>
+<key>ProgramArguments</key><array><string>${process.execPath}</string><string>${entry}</string><string>run</string></array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+<key>StandardOutPath</key><string>${homedir()}/.lark-agent-remote/launchd.out.log</string>
+<key>StandardErrorPath</key><string>${homedir()}/.lark-agent-remote/launchd.err.log</string>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${dirname(process.execPath)}:/Applications/ChatGPT.app/Contents/Resources</string></dict>
+</dict></plist>\n`;
+  writeFileSync(PLIST, xml);
+  await run('launchctl', ['bootout', `gui/${process.getuid()}`, PLIST], { allowFailure: true });
+  await run('launchctl', ['bootstrap', `gui/${process.getuid()}`, PLIST]);
+  return PLIST;
+}
+
+export async function restartLaunchd() {
+  return run('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${LABEL}`]);
+}

@@ -1,0 +1,18 @@
+{
+  "name": "lark-agent-remote",
+  "version": "0.1.0",
+  "description": "Control local Codex and Antigravity agents from Feishu/Lark.",
+  "type": "module",
+  "bin": {
+    "lark-agent-remote": "./bin/lark-agent-remote.js"
+  },
+  "scripts": {
+    "start": "node bin/lark-agent-remote.js run",
+    "test": "node --test",
+    "check": "node --check src/cli.js && node --check src/bridge.js && node --check src/codex.js && node --check src/sessions.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
