@@ -231,6 +231,7 @@ function friendlyError(error) {
   if (error?.code === 'model') return '当前 Antigravity 模型不可用。请打开「设置」重新选择模型。';
   if (error?.code === 'conversation') return 'Antigravity 历史会话无法恢复。请新建会话后重试。';
   if (error?.code === 'permission') return 'Antigravity 正在等待权限确认。请调整权限模式或配置允许规则。';
+  if (error?.code === 'transient') return 'Antigravity 网络连接暂时不可用，自动重试后仍未恢复。请稍后再试。';
   if (/No such file|ENOENT|cwd/i.test(message)) return '执行失败：工作目录不存在或无法访问。请使用 `/cd /有效路径` 切换目录。';
   if (/model.*(not found|unsupported|unavailable)|unsupported.*model/i.test(message)) return '执行失败：当前模型不可用。请打开「设置」重新选择模型。';
   if (/thread.*(not found|missing)|resume/i.test(message)) return '执行失败：历史会话无法恢复。请新建会话后重试。';

@@ -39,7 +39,22 @@ export function listAntigravitySessions({ limit = 15, cachePath = CONVERSATION_C
   }
 }
 
-export function runAntigravityTurn({ prompt, cwd, model, permission, effort, conversationId, onProgress, signal }) {
+export async function runAntigravityTurn(options) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (options.signal?.aborted) throw new AntigravityError('cancelled', 'Task cancelled');
+    try { return await runAntigravityTurnOnce(options); }
+    catch (error) {
+      lastError = error;
+      if (error?.code !== 'transient' || attempt === 2) throw error;
+      options.onProgress?.(`Antigravity 网络波动，正在重试（${attempt + 1}/2）…`);
+      await delay(750 * (attempt + 1), options.signal);
+    }
+  }
+  throw lastError;
+}
+
+function runAntigravityTurnOnce({ prompt, cwd, model, permission, effort, conversationId, onProgress, signal }) {
   const args = ['-p', prompt, '--output-format', 'stream-json', '--print-timeout', '30m'];
   if (conversationId) args.push('--conversation', conversationId);
   if (model) args.push('--model', model);
@@ -115,6 +130,7 @@ function progressLabel(event) {
 
 function classifyError(value) {
   const message = String(value || 'Unknown Antigravity error');
+  if (/(EOF|ECONNRESET|connection reset|temporarily unavailable)/i.test(message)) return new AntigravityError('transient', message);
   if (/authentication required|not signed in/i.test(message)) return new AntigravityError('auth', message);
   if (/eligibility check failed/i.test(message)) return new AntigravityError('eligibility', message);
   if (/invalid model|model.*not.*recognized/i.test(message)) return new AntigravityError('model', message);
@@ -122,4 +138,12 @@ function classifyError(value) {
   if (/conversation.*(not found|invalid)/i.test(message)) return new AntigravityError('conversation', message);
   if (/timed out|timeout/i.test(message)) return new AntigravityError('timeout', message);
   return new AntigravityError('runtime', message);
+}
+
+function delay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); reject(new AntigravityError('cancelled', 'Task cancelled')); };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve(); }, ms);
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
