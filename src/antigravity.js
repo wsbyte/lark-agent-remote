@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline';
 const AGY = process.env.LARK_AGENT_REMOTE_AGY || `${process.env.HOME}/.local/bin/agy`;
 const CONVERSATION_CACHE = `${process.env.HOME}/.gemini/antigravity-cli/cache/conversation_metadata.json`;
 const CONVERSATIONS_DIR = `${process.env.HOME}/.gemini/antigravity-cli/conversations`;
+const BRAIN_DIR = `${process.env.HOME}/.gemini/antigravity-cli/brain`;
 
 export async function listAntigravityModels() {
   return new Promise((resolve) => {
@@ -32,7 +33,7 @@ export function antigravityEffortFromModel(model) {
   return model?.match(/-(low|medium|high)$/i)?.[1]?.toLowerCase() || '';
 }
 
-export function listAntigravitySessions({ limit = 15, cachePath = CONVERSATION_CACHE, conversationsDir = CONVERSATIONS_DIR } = {}) {
+export function listAntigravitySessions({ limit = 15, cachePath = CONVERSATION_CACHE, conversationsDir = CONVERSATIONS_DIR, brainDir = BRAIN_DIR } = {}) {
   if (!existsSync(conversationsDir)) return [];
   try {
     const data = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, 'utf8')) : { conversations: {} };
@@ -47,7 +48,7 @@ export function listAntigravitySessions({ limit = 15, cachePath = CONVERSATION_C
         const item = metadata[id];
         return {
           id,
-          title: item?.summary?.Title || item?.summary?.Preview || `Antigravity 会话 ${id.slice(0, 8)}`,
+          title: item?.summary?.Title || item?.summary?.Preview || transcriptTitle(id, brainDir) || '未命名会话',
           updatedAt: item?.last_modified_time || item?.summary?.UpdatedAt || statSync(join(conversationsDir, entry.name)).mtime.toISOString(),
         };
       })
@@ -56,6 +57,25 @@ export function listAntigravitySessions({ limit = 15, cachePath = CONVERSATION_C
   } catch {
     return [];
   }
+}
+
+function transcriptTitle(id, brainDir) {
+  const transcript = join(brainDir, id, '.system_generated', 'logs', 'transcript.jsonl');
+  if (!existsSync(transcript)) return '';
+  try {
+    for (const line of readFileSync(transcript, 'utf8').split(/\r?\n/)) {
+      if (!line) continue;
+      const step = JSON.parse(line);
+      if (step?.type !== 'USER_INPUT' || step?.source !== 'USER_EXPLICIT') continue;
+      const request = String(step.content || '').match(/<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/i)?.[1] || '';
+      const clean = request
+        .split(/\n\n(?:文件回传规则：|如果你生成了需要发回飞书的文件)/)[0]
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (clean) return clean.length > 48 ? `${clean.slice(0, 47)}…` : clean;
+    }
+  } catch {}
+  return '';
 }
 
 export async function runAntigravityTurn(options) {

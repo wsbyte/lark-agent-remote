@@ -44,6 +44,20 @@ test('does not expose desktop-only Antigravity sessions that agy cannot resume',
   assert.deepEqual(listAntigravitySessions({ cachePath, conversationsDir }).map((item) => item.id), ['cli-session']);
 });
 
+test('uses the first real user request as the CLI conversation title', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-session-title-'));
+  const conversationsDir = join(root, 'conversations');
+  const brainDir = join(root, 'brain');
+  mkdirSync(conversationsDir);
+  mkdirSync(join(brainDir, 'cli-session', '.system_generated', 'logs'), { recursive: true });
+  writeFileSync(join(conversationsDir, 'cli-session.db'), '');
+  writeFileSync(join(brainDir, 'cli-session', '.system_generated', 'logs', 'transcript.jsonl'), `${JSON.stringify({
+    source: 'USER_EXPLICIT', type: 'USER_INPUT', content: '<USER_REQUEST>\n帮我整理 Downloads 目录\n\n文件回传规则：不要只发路径\n</USER_REQUEST>',
+  })}\n`);
+  const sessions = listAntigravitySessions({ cachePath: join(root, 'missing.json'), conversationsDir, brainDir });
+  assert.equal(sessions[0].title, '帮我整理 Downloads 目录');
+});
+
 test('parses Antigravity stream-json results', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agy-fake-'));
   const fake = join(root, 'agy');
