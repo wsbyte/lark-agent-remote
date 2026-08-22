@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 const AGY = process.env.LARK_AGENT_REMOTE_AGY || `${process.env.HOME}/.local/bin/agy`;
 const CONVERSATION_CACHE = `${process.env.HOME}/.gemini/antigravity-cli/cache/conversation_metadata.json`;
+const CONVERSATIONS_DIR = `${process.env.HOME}/.gemini/antigravity-cli/conversations`;
 
 export async function listAntigravityModels() {
   return new Promise((resolve) => {
@@ -30,17 +32,25 @@ export function antigravityEffortFromModel(model) {
   return model?.match(/-(low|medium|high)$/i)?.[1]?.toLowerCase() || '';
 }
 
-export function listAntigravitySessions({ limit = 15, cachePath = CONVERSATION_CACHE } = {}) {
-  if (!existsSync(cachePath)) return [];
+export function listAntigravitySessions({ limit = 15, cachePath = CONVERSATION_CACHE, conversationsDir = CONVERSATIONS_DIR } = {}) {
+  if (!existsSync(conversationsDir)) return [];
   try {
-    const data = JSON.parse(readFileSync(cachePath, 'utf8'));
-    return Object.values(data.conversations || {})
-      .filter((item) => !item?.is_internal && item?.summary?.ID)
-      .map((item) => ({
-        id: item.summary.ID,
-        title: item.summary.Title || item.summary.Preview || `会话 ${item.summary.ID.slice(0, 8)}`,
-        updatedAt: item.last_modified_time || item.summary.UpdatedAt || '',
-      }))
+    const data = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, 'utf8')) : { conversations: {} };
+    const metadata = data.conversations || {};
+    // Desktop-only IDs also appear in conversation_metadata.json, but agy
+    // cannot resume them until the user explicitly imports them in the TUI.
+    // A local CLI database is the reliable indication that --conversation is usable.
+    return readdirSync(conversationsDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.db'))
+      .map((entry) => {
+        const id = basename(entry.name, '.db');
+        const item = metadata[id];
+        return {
+          id,
+          title: item?.summary?.Title || item?.summary?.Preview || `Antigravity 会话 ${id.slice(0, 8)}`,
+          updatedAt: item?.last_modified_time || item?.summary?.UpdatedAt || statSync(join(conversationsDir, entry.name)).mtime.toISOString(),
+        };
+      })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, limit);
   } catch {
@@ -147,7 +157,7 @@ function classifyError(value) {
   if (/eligibility check failed/i.test(message)) return new AntigravityError('eligibility', message);
   if (/invalid model|model.*not.*recognized/i.test(message)) return new AntigravityError('model', message);
   if (/permission|waiting on input|approval/i.test(message)) return new AntigravityError('permission', message);
-  if (/conversation.*(not found|invalid)/i.test(message)) return new AntigravityError('conversation', message);
+  if (/(conversation|trajectory).*(not found|invalid)/i.test(message)) return new AntigravityError('conversation', message);
   if (/timed out|timeout/i.test(message)) return new AntigravityError('timeout', message);
   return new AntigravityError('runtime', message);
 }

@@ -39,7 +39,7 @@ export function messageText(event) {
 
 export function withAttachmentContext(prompt, paths) {
   const attachmentText = paths.length ? `\n\n飞书附件（已下载到本机）：\n${paths.map((path) => `- ${path}`).join('\n')}` : '';
-  return `${prompt}${attachmentText}\n\n如果你生成了需要发回飞书的文件，请在回复末尾逐行写：LARK_FILE: /absolute/path`;
+  return `${prompt}${attachmentText}\n\n文件回传规则：如果用户要求你创建、修改或发送文件，不要只回复本地路径。请先把文件保存到当前工作目录内，然后必须在回复末尾为每个文件逐行写：LARK_FILE: /absolute/path。Bridge 会据此把真实文件附件上传到飞书；正文中只需说明文件已发送。`;
 }
 
 export function extractOutgoingFiles(answer, workspace) {

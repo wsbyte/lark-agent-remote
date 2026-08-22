@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -14,17 +14,34 @@ test('keeps Antigravity model variants aligned with reasoning effort', () => {
 test('lists recent non-internal Antigravity sessions from the official cache', () => {
   const root = mkdtempSync(join(tmpdir(), 'agy-sessions-'));
   const cachePath = join(root, 'conversation_metadata.json');
+  const conversationsDir = join(root, 'conversations');
+  mkdirSync(conversationsDir);
+  writeFileSync(join(conversationsDir, 'old.db'), '');
+  writeFileSync(join(conversationsDir, 'newest.db'), '');
   writeFileSync(cachePath, JSON.stringify({ conversations: {
     old: { summary: { ID: 'old', Preview: 'Old task' }, last_modified_time: '2026-08-20T00:00:00Z', is_internal: false },
     newest: { summary: { ID: 'newest', Title: 'Newest task' }, last_modified_time: '2026-08-22T00:00:00Z', is_internal: false },
     hidden: { summary: { ID: 'hidden', Title: 'Internal' }, last_modified_time: '2026-08-23T00:00:00Z', is_internal: true },
   } }));
 
-  const sessions = listAntigravitySessions({ cachePath });
+  const sessions = listAntigravitySessions({ cachePath, conversationsDir });
   assert.deepEqual(sessions.map(({ id, title }) => ({ id, title })), [
     { id: 'newest', title: 'Newest task' },
     { id: 'old', title: 'Old task' },
   ]);
+});
+
+test('does not expose desktop-only Antigravity sessions that agy cannot resume', () => {
+  const root = mkdtempSync(join(tmpdir(), 'agy-local-sessions-'));
+  const cachePath = join(root, 'conversation_metadata.json');
+  const conversationsDir = join(root, 'conversations');
+  mkdirSync(conversationsDir);
+  writeFileSync(join(conversationsDir, 'cli-session.db'), '');
+  writeFileSync(cachePath, JSON.stringify({ conversations: {
+    'desktop-only': { summary: { ID: 'desktop-only', Title: 'Desktop' } },
+    'cli-session': { summary: { ID: 'cli-session', Title: 'CLI' } },
+  } }));
+  assert.deepEqual(listAntigravitySessions({ cachePath, conversationsDir }).map((item) => item.id), ['cli-session']);
 });
 
 test('parses Antigravity stream-json results', async () => {
