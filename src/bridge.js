@@ -1,6 +1,8 @@
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { configCard, fullAccessConfirmationCard, historyCard, taskCard } from './cards.js';
+import { listAntigravityModels, listAntigravitySessions, runAntigravityTurn } from './antigravity.js';
+import { cleanupOldAttachments, extractOutgoingFiles, messageText, receiveAttachments, sendOutgoingFiles, withAttachmentContext } from './attachments.js';
 import { loadConfig, LOG_PATH, saveConfig } from './config.js';
 import { listCodexModels, runCodexTurn } from './codex.js';
 import { consumeEvent, replyCard, replyText, sendCard, updateCallbackCard, updateMessageCard } from './lark.js';
@@ -10,8 +12,9 @@ import { listCodexSessions } from './sessions.js';
 export async function startBridge() {
   let config = loadConfig();
   const activeTasks = new Map();
-  const availability = { codex: await commandExists('codex'), antigravity: await commandExists('agy') };
-  const models = { codex: await listCodexModels(), antigravity: [] };
+  const availability = { codex: await commandExists('codex'), antigravity: existsSync(`${process.env.HOME}/.local/bin/agy`) || await commandExists('agy') };
+  const models = { codex: await listCodexModels(), antigravity: availability.antigravity ? await listAntigravityModels() : [] };
+  cleanupOldAttachments();
   log(`starting engine=${config.engine} codexModels=${models.codex.length}`);
 
   const messageConsumer = consumeEvent('im.message.receive_v1', (event) => { void handleMessage(event).catch((error) => log(error.stack || error.message)); });
@@ -33,7 +36,7 @@ export async function startBridge() {
       saveConfig(config);
     }
     if (event.sender_id !== config.ownerId) return;
-    const text = String(event.content || '').trim().replace(/^@\S+\s*/, '');
+    const text = messageText(event).replace(/^@\S+\s*/, '');
     if (!text) return;
     if (text === '/config') {
       await replyCard(event.message_id, configCard(config, models[config.engine] || [], availability));
@@ -45,12 +48,13 @@ export async function startBridge() {
     }
     if (text === '/history') {
       const key = scope(event);
-      const sessions = await listCodexSessions({ limit: 15 });
-      await replyCard(event.message_id, historyCard(sessions, config.conversations[key]?.codexThreadId));
+      const sessions = recentSessions(config.engine);
+      const currentId = config.engine === 'antigravity' ? config.conversations[key]?.antigravityConversationId : config.conversations[key]?.codexThreadId;
+      await replyCard(event.message_id, historyCard(await sessions, currentId, config.engine));
       return;
     }
     if (text === '/new') {
-      delete config.conversations[scope(event)];
+      clearCurrentSession(scope(event));
       saveConfig(config);
       await replyText(event.message_id, '✅ 已新建会话，下一条消息会创建新的 Agent Session。');
       return;
@@ -62,17 +66,20 @@ export async function startBridge() {
       await replyText(event.message_id, `✅ 工作目录已切换为：\`${config.workspace}\``);
       return;
     }
-    if (config.engine === 'antigravity') {
-      await replyText(event.message_id, 'Antigravity CLI (`agy`) 尚未安装。请先切换回 Codex。');
-      return;
-    }
-
     const key = scope(event);
     if (activeTasks.has(key)) {
       await replyText(event.message_id, '当前会话已有任务正在执行。请等待完成，或点击任务卡片中的「停止任务」。');
       return;
     }
     const startedAt = Date.now();
+    let attachments = [];
+    try {
+      attachments = await receiveAttachments(event);
+    } catch (error) {
+      await replyText(event.message_id, `附件下载失败：${friendlyError(error).replace(/^执行失败：/, '')}`);
+      return;
+    }
+    const agentPrompt = withAttachmentContext(text, attachments);
     const initialCard = taskCard({ state: 'running', prompt: text, config, taskKey: key });
     const sent = await replyCard(event.message_id, initialCard);
     const taskMessageId = sent.message_id || sent.messageId || '';
@@ -92,23 +99,36 @@ export async function startBridge() {
     };
     const session = config.conversations[key] || {};
     try {
-      const result = await runCodexTurn({
-        prompt: text,
+      const common = {
+        prompt: agentPrompt,
         cwd: config.workspace,
         model: config.model,
         permission: config.permission,
         effort: config.effort,
-        threadId: session.codexThreadId,
         signal: controller.signal,
         onProgress: (message) => { void updateProgress(message); },
-      });
-      config.conversations[key] = { ...session, codexThreadId: result.threadId, updatedAt: new Date().toISOString() };
+      };
+      const result = config.engine === 'antigravity'
+        ? await runAntigravityTurn({ ...common, conversationId: session.antigravityConversationId })
+        : await runCodexTurn({ ...common, threadId: session.codexThreadId });
+      config.conversations[key] = {
+        ...session,
+        ...(config.engine === 'antigravity'
+          ? { antigravityConversationId: result.conversationId }
+          : { codexThreadId: result.threadId }),
+        updatedAt: new Date().toISOString(),
+      };
       saveConfig(config);
       const duration = formatDuration(Date.now() - startedAt);
-      const completed = taskCard({ state: 'completed', prompt: text, answer: result.answer, config, duration });
+      const outgoing = extractOutgoingFiles(result.answer, config.workspace);
+      const completed = taskCard({ state: 'completed', prompt: text, answer: outgoing.answer, config, duration });
       await cardUpdateChain;
       if (taskMessageId) await updateMessageCard(taskMessageId, completed);
       else await replyCard(event.message_id, completed);
+      if (outgoing.files.length) {
+        try { await sendOutgoingFiles(event.message_id, outgoing.files); }
+        catch (error) { await replyText(event.message_id, `任务已完成，但文件上传失败：${String(error.message || error).slice(0, 300)}`); }
+      }
     } catch (error) {
       log(`${key} error ${error.stack || error.message}`);
       const cancelled = error?.code === 'cancelled' || controller.signal.aborted;
@@ -150,24 +170,29 @@ export async function startBridge() {
       if (task) task.controller.abort();
       return;
     } else if (value.action === 'session' && value.value === 'new') {
-      if (event.chat_id) delete config.conversations[event.chat_id];
+      if (event.chat_id) clearCurrentSession(event.chat_id);
     } else if (value.action === 'open_config') {
       if (event.chat_id) await sendCard(event.chat_id, configCard(config, models[config.engine] || [], availability));
       return;
     } else if (value.action === 'open_history') {
       if (event.chat_id) {
-        const sessions = await listCodexSessions({ limit: 15 });
-        await sendCard(event.chat_id, historyCard(sessions, config.conversations[event.chat_id]?.codexThreadId));
+        const sessions = await recentSessions(config.engine);
+        const currentId = config.engine === 'antigravity' ? config.conversations[event.chat_id]?.antigravityConversationId : config.conversations[event.chat_id]?.codexThreadId;
+        await sendCard(event.chat_id, historyCard(sessions, currentId, config.engine));
       }
       return;
     } else if (value.action === 'resume_session' && value.threadId) {
       if (!event.chat_id) return;
-      const sessions = await listCodexSessions({ limit: 15 });
+      const sessions = await recentSessions(config.engine);
       if (!sessions.some((session) => session.id === value.threadId)) return;
-      config.conversations[event.chat_id] = { codexThreadId: value.threadId, updatedAt: new Date().toISOString() };
+      config.conversations[event.chat_id] = {
+        ...(config.conversations[event.chat_id] || {}),
+        ...(config.engine === 'antigravity' ? { antigravityConversationId: value.threadId } : { codexThreadId: value.threadId }),
+        updatedAt: new Date().toISOString(),
+      };
       saveConfig(config);
       log(`session resumed ${value.threadId}`);
-      if (event.token) await updateCallbackCard(event.token, historyCard(sessions, value.threadId), operator);
+      if (event.token) await updateCallbackCard(event.token, historyCard(sessions, value.threadId, config.engine), operator);
       return;
     } else return;
     saveConfig(config);
@@ -177,6 +202,18 @@ export async function startBridge() {
     if (event.token && ['engine', 'model', 'effort', 'permission', 'confirm_permission'].includes(value.action)) {
       await updateCallbackCard(event.token, configCard(config, models[config.engine] || [], availability), operator);
     }
+  }
+
+  function recentSessions(engine) {
+    return engine === 'antigravity' ? listAntigravitySessions({ limit: 15 }) : listCodexSessions({ limit: 15 });
+  }
+
+  function clearCurrentSession(key) {
+    const session = config.conversations[key];
+    if (!session) return;
+    if (config.engine === 'antigravity') delete session.antigravityConversationId;
+    else delete session.codexThreadId;
+    if (!session.codexThreadId && !session.antigravityConversationId) delete config.conversations[key];
   }
 }
 
@@ -189,6 +226,11 @@ function parseActionValue(value) {
 function formatDuration(ms) { return ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))}s` : `${Math.round(ms / 60_000)}m`; }
 function friendlyError(error) {
   const message = String(error?.message || error || '未知错误');
+  if (error?.code === 'auth') return 'Antigravity CLI 尚未登录。请在 Mac 终端运行 `agy` 并完成 Google 登录。';
+  if (error?.code === 'eligibility') return 'Antigravity 账号资格检查失败。请确认网络可访问 Google 服务，然后在 Mac 终端运行一次 `agy`。';
+  if (error?.code === 'model') return '当前 Antigravity 模型不可用。请打开「设置」重新选择模型。';
+  if (error?.code === 'conversation') return 'Antigravity 历史会话无法恢复。请新建会话后重试。';
+  if (error?.code === 'permission') return 'Antigravity 正在等待权限确认。请调整权限模式或配置允许规则。';
   if (/No such file|ENOENT|cwd/i.test(message)) return '执行失败：工作目录不存在或无法访问。请使用 `/cd /有效路径` 切换目录。';
   if (/model.*(not found|unsupported|unavailable)|unsupported.*model/i.test(message)) return '执行失败：当前模型不可用。请打开「设置」重新选择模型。';
   if (/thread.*(not found|missing)|resume/i.test(message)) return '执行失败：历史会话无法恢复。请新建会话后重试。';

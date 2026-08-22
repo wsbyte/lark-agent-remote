@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startBridge } from './bridge.js';
 import { CONFIG_PATH, initializeConfig, loadConfig, LOG_PATH } from './config.js';
@@ -46,6 +46,8 @@ export async function main(args) {
       larkCli: await commandExists('lark-cli'),
       larkConfigured: larkConfig.code === 0,
       codex: existsSync('/Applications/ChatGPT.app/Contents/Resources/codex') || await commandExists('codex'),
+      antigravityCli: existsSync(`${process.env.HOME}/.local/bin/agy`) || await commandExists('agy'),
+      antigravityOnboarding: antigravityOnboardingStatus(),
       config: existsSync(CONFIG_PATH),
       workspace,
       service,
@@ -74,6 +76,11 @@ function directoryAccess(path) {
 
 function publicConfig(config) {
   return { engine: config.engine, model: config.model || 'default', effort: config.effort, permission: config.permission, workspace: config.workspace };
+}
+
+function antigravityOnboardingStatus() {
+  const path = `${process.env.HOME}/.gemini/antigravity-cli/cache/onboarding.json`;
+  try { return Boolean(JSON.parse(readFileSync(path, 'utf8')).onboardingComplete); } catch { return false; }
 }
 
 function valueAfter(args, flag) {

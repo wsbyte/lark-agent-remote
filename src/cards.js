@@ -28,7 +28,7 @@ export function fullAccessConfirmationCard(config) {
     config: { wide_screen_mode: true },
     header: { template: 'red', title: { tag: 'plain_text', content: '确认完整权限' } },
     elements: [
-      { tag: 'markdown', content: '**完整权限允许 Codex 访问工作区之外的文件，并执行系统命令。**\n\n仅在你明确需要时开启。' },
+      { tag: 'markdown', content: '**完整权限允许 Agent 访问工作区之外的文件，并执行系统命令。**\n\n仅在你明确需要时开启。' },
       { tag: 'note', elements: [{ tag: 'plain_text', content: `当前工作目录：${config.workspace}` }] },
       { tag: 'action', actions: [
         button('取消', { action: 'cancel_permission', value: 'cancel' }),
@@ -73,7 +73,7 @@ export function taskCard({ state, prompt, answer = '', progress = '正在分析�
   return card;
 }
 
-export function historyCard(sessions, currentThreadId = '') {
+export function historyCard(sessions, currentThreadId = '', engine = 'codex') {
   const elements = sessions.length ? sessions.flatMap((session) => [
     {
       tag: 'div',
@@ -85,7 +85,7 @@ export function historyCard(sessions, currentThreadId = '') {
   ]) : [{ tag: 'markdown', content: '还没有可恢复的 Codex 会话。' }];
   return {
     config: { wide_screen_mode: true },
-    header: { template: 'blue', title: { tag: 'plain_text', content: '历史会话' } },
+    header: { template: 'blue', title: { tag: 'plain_text', content: `${engine === 'antigravity' ? 'Antigravity' : 'Codex'} 历史会话` } },
     elements: [
       ...elements,
       { tag: 'note', elements: [{ tag: 'plain_text', content: `全部工作目录 · 最近 ${sessions.length} 条` }] },

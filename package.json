@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node bin/lark-agent-remote.js run",
     "test": "node --test",
-    "check": "node --check src/cli.js && node --check src/bridge.js && node --check src/codex.js && node --check src/sessions.js"
+    "check": "node --check src/cli.js && node --check src/bridge.js && node --check src/codex.js && node --check src/antigravity.js && node --check src/attachments.js && node --check src/sessions.js"
   },
   "engines": {
     "node": ">=20"

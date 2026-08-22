@@ -19,7 +19,7 @@ export async function installLaunchd() {
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
 <key>StandardOutPath</key><string>${homedir()}/.lark-agent-remote/launchd.out.log</string>
 <key>StandardErrorPath</key><string>${homedir()}/.lark-agent-remote/launchd.err.log</string>
-<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${dirname(process.execPath)}:/Applications/ChatGPT.app/Contents/Resources</string></dict>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>${homedir()}/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:${dirname(process.execPath)}:/Applications/ChatGPT.app/Contents/Resources</string></dict>
 </dict></plist>\n`;
   writeFileSync(PLIST, xml);
   await run('launchctl', ['bootout', `gui/${process.getuid()}`, PLIST], { allowFailure: true });

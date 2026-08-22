@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { basename, dirname } from 'node:path';
 import { run } from './process.js';
 
 export function consumeEvent(eventKey, onEvent) {
@@ -59,6 +60,15 @@ export async function updateCallbackCard(token, card, operatorId) {
   return run('lark-cli', ['api', 'POST', '/open-apis/interactive/v1/card/update', '--data', payload, '--as', 'bot']);
 }
 
+export async function downloadMessageResource(messageId, fileKey, type, output) {
+  const result = await run('lark-cli', ['im', '+messages-resources-download', '--as', 'bot', '--message-id', messageId, '--file-key', fileKey, '--type', type, '--output', output], { cwd: HOME_FOR_DOWNLOADS() });
+  return parseData(result.stdout).saved_path || output;
+}
+
+export async function replyMedia(messageId, absolutePath, type = 'file') {
+  return run('lark-cli', ['im', '+messages-reply', '--as', 'bot', '--message-id', messageId, `--${type}`, basename(absolutePath), '--idempotency-key', shortKey(`media-${messageId}-${absolutePath}`)], { cwd: dirname(absolutePath) });
+}
+
 function shortKey(value) {
   let hash = 2166136261;
   for (const char of value) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
@@ -68,3 +78,5 @@ function shortKey(value) {
 function parseData(stdout) {
   try { return JSON.parse(stdout)?.data || {}; } catch { return {}; }
 }
+
+function HOME_FOR_DOWNLOADS() { return `${process.env.HOME}/.lark-agent-remote`; }

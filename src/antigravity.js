@@ -1,0 +1,125 @@
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+
+const AGY = process.env.LARK_AGENT_REMOTE_AGY || `${process.env.HOME}/.local/bin/agy`;
+const CONVERSATION_CACHE = `${process.env.HOME}/.gemini/antigravity-cli/cache/conversation_metadata.json`;
+
+export async function listAntigravityModels() {
+  return new Promise((resolve) => {
+    const child = spawn(AGY, ['models'], { env: process.env, stdio: ['ignore', 'pipe', 'ignore'] });
+    let output = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.on('error', () => resolve([]));
+    child.on('close', (code) => {
+      if (code !== 0) return resolve([]);
+      resolve(output.split(/\r?\n/)
+        .map((line) => line.trim().split(/\s+/)[0])
+        .filter((model) => model && /^[a-z0-9][a-z0-9._-]+$/i.test(model)));
+    });
+  });
+}
+
+export function listAntigravitySessions({ limit = 15, cachePath = CONVERSATION_CACHE } = {}) {
+  if (!existsSync(cachePath)) return [];
+  try {
+    const data = JSON.parse(readFileSync(cachePath, 'utf8'));
+    return Object.values(data.conversations || {})
+      .filter((item) => !item?.is_internal && item?.summary?.ID)
+      .map((item) => ({
+        id: item.summary.ID,
+        title: item.summary.Title || item.summary.Preview || `会话 ${item.summary.ID.slice(0, 8)}`,
+        updatedAt: item.last_modified_time || item.summary.UpdatedAt || '',
+      }))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+export function runAntigravityTurn({ prompt, cwd, model, permission, effort, conversationId, onProgress, signal }) {
+  const args = ['-p', prompt, '--output-format', 'stream-json', '--print-timeout', '30m'];
+  if (conversationId) args.push('--conversation', conversationId);
+  if (model) args.push('--model', model);
+  if (effort) args.push('--effort', effort);
+  if (permission === 'read-only') args.push('--sandbox');
+  if (permission === 'workspace-write') args.push('--sandbox', '--mode', 'accept-edits');
+  if (permission === 'danger-full-access') args.push('--mode', 'accept-edits', '--dangerously-skip-permissions');
+
+  return new Promise((resolve, reject) => {
+    let result;
+    let stderr = '';
+    let cancelled = false;
+    let settled = false;
+    let exited = false;
+    const child = spawn(AGY, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', abort);
+      fn(value);
+    };
+    const abort = () => {
+      if (cancelled || child.killed) return;
+      cancelled = true;
+      child.kill('SIGINT');
+      setTimeout(() => { if (!exited) child.kill('SIGTERM'); }, 2_000).unref();
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    lines.on('line', (line) => {
+      let event;
+      try { event = JSON.parse(line); } catch { return; }
+      if (event.event === 'init') onProgress?.('正在启动 Antigravity…');
+      else if (event.event === 'step_update') onProgress?.(progressLabel(event));
+      else if (event.event === 'result') result = event.result || event;
+    });
+    child.on('error', (error) => finish(reject, new AntigravityError('process', error.message)));
+    child.on('close', (code) => {
+      exited = true;
+      const status = String(result?.status || '').toUpperCase();
+      if (cancelled || ['CANCELED', 'INTERRUPTED'].includes(status)) {
+        finish(reject, new AntigravityError('cancelled', 'Task cancelled'));
+      } else if (code !== 0 || status !== 'SUCCESS') {
+        finish(reject, classifyError(result?.error || stderr || `Antigravity exited with code ${code}`));
+      } else {
+        finish(resolve, {
+          answer: String(result?.response || '').trim() || '任务已完成。',
+          conversationId: result?.conversation_id || conversationId || '',
+          usage: result?.usage || {},
+        });
+      }
+    });
+  });
+}
+
+export class AntigravityError extends Error {
+  constructor(code, message) { super(message); this.name = 'AntigravityError'; this.code = code; }
+}
+
+function progressLabel(event) {
+  const step = event.step_update || event.step || event.data || event;
+  const type = String(step.step_type || step.type || '').toLowerCase();
+  if (/command|terminal|shell/.test(type)) return '正在执行命令…';
+  if (/file|write|edit|patch/.test(type)) return '正在修改文件…';
+  if (/tool|mcp|browser|search/.test(type)) return '正在调用工具…';
+  if (/subagent|task/.test(type)) return '正在协调子任务…';
+  return '正在分析…';
+}
+
+function classifyError(value) {
+  const message = String(value || 'Unknown Antigravity error');
+  if (/authentication required|not signed in/i.test(message)) return new AntigravityError('auth', message);
+  if (/eligibility check failed/i.test(message)) return new AntigravityError('eligibility', message);
+  if (/invalid model|model.*not.*recognized/i.test(message)) return new AntigravityError('model', message);
+  if (/permission|waiting on input|approval/i.test(message)) return new AntigravityError('permission', message);
+  if (/conversation.*(not found|invalid)/i.test(message)) return new AntigravityError('conversation', message);
+  if (/timed out|timeout/i.test(message)) return new AntigravityError('timeout', message);
+  return new AntigravityError('runtime', message);
+}

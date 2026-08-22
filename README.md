@@ -2,7 +2,7 @@
 
 Control local Codex and Antigravity agents remotely from Feishu/Lark.
 
-> This is an early MVP. The Codex `app-server` integration is available; the Antigravity adapter will be enabled once its `agy` CLI is available.
+Codex uses the app bundled with Codex Desktop. Antigravity uses Google's official `agy` headless CLI with structured streaming output.
 
 ## Quick start
 
@@ -25,6 +25,29 @@ Completed task cards also provide quick actions for starting a new session, brow
 
 Running tasks can be interrupted from their card. Full-computer access always requires an explicit confirmation, while recoverable runtime failures are reported in the same task card with a suggested next step.
 
+## Antigravity
+
+Install and authenticate the official CLI once:
+
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+agy
+```
+
+After onboarding, open the bot settings and switch the engine to Antigravity. The bridge discovers available models dynamically, streams progress into the task card, persists independent Antigravity conversation IDs, and can resume recent desktop/CLI history exposed by the official conversation cache.
+
+## Images and files
+
+The bot accepts Feishu image and file messages. Resources are downloaded into the private `~/.lark-agent-remote/attachments/` directory and supplied to the selected agent as local paths. Downloads older than seven days are removed automatically.
+
+Agents can send generated files back by ending their response with one or more lines in this form:
+
+```text
+LARK_FILE: /absolute/path/inside/the/workspace
+```
+
+Only existing files inside the configured workspace are uploaded, with a 20 MB limit and at most three files per task. The Feishu app needs the `im:resource` and message resource read permissions for attachment transfer.
+
 ## Background service and diagnostics
 
 ```bash
@@ -39,6 +62,7 @@ lark-agent-remote doctor
 - The first user who messages the bot becomes its only owner.
 - The default permission mode is `workspace-write`.
 - Feishu/Lark credentials and tokens remain managed by the official `lark-cli`; this project does not copy them.
+- Generated files are only uploaded from inside the configured workspace.
 
 ## License
 
