@@ -23,15 +23,32 @@ export function configCard(config, models, availability) {
   };
 }
 
-export function taskCard({ state, prompt, answer = '', progress = '正在分析…', config, duration = '' }) {
+export function fullAccessConfirmationCard(config) {
+  return {
+    config: { wide_screen_mode: true },
+    header: { template: 'red', title: { tag: 'plain_text', content: '确认完整权限' } },
+    elements: [
+      { tag: 'markdown', content: '**完整权限允许 Codex 访问工作区之外的文件，并执行系统命令。**\n\n仅在你明确需要时开启。' },
+      { tag: 'note', elements: [{ tag: 'plain_text', content: `当前工作目录：${config.workspace}` }] },
+      { tag: 'action', actions: [
+        button('取消', { action: 'cancel_permission', value: 'cancel' }),
+        button('确认开启', { action: 'confirm_permission', value: 'danger-full-access' }, 'danger'),
+      ] },
+    ],
+  };
+}
+
+export function taskCard({ state, prompt, answer = '', progress = '正在分析…', config, duration = '', taskKey = '' }) {
   const appearance = {
     running: { template: 'blue', icon: '⏳', title: `${engineLabel(config)} 执行中...` },
     completed: { template: '', icon: '', title: '' },
+    cancelled: { template: 'grey', icon: '⏹', title: '任务已停止' },
     failed: { template: 'red', icon: '❌', title: '任务失败' },
   }[state] || { template: 'grey', icon: '•', title: '任务状态' };
   const elements = [];
   if (state === 'running') {
     elements.push({ tag: 'markdown', content: progress });
+    elements.push({ tag: 'action', actions: [button('停止任务', { action: 'cancel_task', value: 'cancel', taskKey }, 'danger')] });
   } else {
     elements.push({ tag: 'markdown', content: clip(answer || '任务已完成。', 3500) });
   }

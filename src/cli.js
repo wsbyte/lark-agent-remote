@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { startBridge } from './bridge.js';
 import { CONFIG_PATH, initializeConfig, loadConfig, LOG_PATH } from './config.js';
-import { installLaunchd, restartLaunchd } from './launchd.js';
+import { installLaunchd, launchdStatus, restartLaunchd } from './launchd.js';
 import { commandExists, run, runInteractive } from './process.js';
 
 export async function main(args) {
@@ -17,11 +17,11 @@ export async function main(args) {
     }
     initializeConfig(resolve(workspace));
     console.log(`配置已保存：${CONFIG_PATH}`);
-    if (args.includes('--install-launchd')) {
+    if (!args.includes('--no-install')) {
       const plist = await installLaunchd();
       console.log(`后台服务已安装：${plist}`);
     } else {
-      console.log('运行 `lark-agent-remote run` 开始测试；稳定后运行 `lark-agent-remote install` 设置开机启动。');
+      console.log('配置已完成。运行 `lark-agent-remote run` 开始测试。');
     }
     return;
   }
@@ -31,28 +31,49 @@ export async function main(args) {
     return;
   }
   if (command === 'restart') { await restartLaunchd(); console.log('已重启。'); return; }
-  if (command === 'status') { console.log(JSON.stringify(loadConfig(), null, 2)); return; }
+  if (command === 'status') {
+    const config = loadConfig();
+    console.log(JSON.stringify({ service: await launchdStatus(), runtime: publicConfig(config) }, null, 2));
+    return;
+  }
   if (command === 'doctor') {
+    const config = loadConfig();
+    const larkConfig = await run('lark-cli', ['config', 'show'], { allowFailure: true }).catch(() => ({ code: 1 }));
+    const workspace = directoryAccess(config.workspace);
+    const service = await launchdStatus();
     const checks = {
       node: process.version,
       larkCli: await commandExists('lark-cli'),
-      codex: await commandExists('codex'),
-      antigravityCli: await commandExists('agy'),
+      larkConfigured: larkConfig.code === 0,
+      codex: existsSync('/Applications/ChatGPT.app/Contents/Resources/codex') || await commandExists('codex'),
       config: existsSync(CONFIG_PATH),
+      workspace,
+      service,
       log: LOG_PATH,
     };
-    console.log(JSON.stringify(checks, null, 2));
+    console.log(JSON.stringify({ ok: checks.larkCli && checks.larkConfigured && checks.codex && checks.config && workspace.readable && service.running, checks }, null, 2));
     return;
   }
   console.log(`lark-agent-remote
 
 Commands:
-  setup [--workspace PATH] [--install-launchd]
+  setup [--workspace PATH] [--no-install]
   run
   install
   restart
   status
   doctor`);
+}
+
+function directoryAccess(path) {
+  const result = { path, exists: existsSync(path), readable: false, writable: false };
+  try { accessSync(path, constants.R_OK); result.readable = true; } catch {}
+  try { accessSync(path, constants.W_OK); result.writable = true; } catch {}
+  return result;
+}
+
+function publicConfig(config) {
+  return { engine: config.engine, model: config.model || 'default', effort: config.effort, permission: config.permission, workspace: config.workspace };
 }
 
 function valueAfter(args, flag) {

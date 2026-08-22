@@ -9,8 +9,9 @@ Control local Codex and Antigravity agents remotely from Feishu/Lark.
 ```bash
 npm link
 lark-agent-remote setup --workspace /path/to/project
-lark-agent-remote run
 ```
+
+`setup` also installs and starts the macOS background service. Use `--no-install` only when you want to run it manually with `lark-agent-remote run`.
 
 Send these commands in Feishu/Lark:
 
@@ -22,11 +23,15 @@ Send these commands in Feishu/Lark:
 
 Completed task cards also provide quick actions for starting a new session, browsing history, and opening settings.
 
-## Run in the background on macOS
+Running tasks can be interrupted from their card. Full-computer access always requires an explicit confirmation, while recoverable runtime failures are reported in the same task card with a suggested next step.
+
+## Background service and diagnostics
 
 ```bash
 lark-agent-remote install
 lark-agent-remote restart
+lark-agent-remote status
+lark-agent-remote doctor
 ```
 
 ## Security defaults

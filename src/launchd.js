@@ -30,3 +30,13 @@ export async function installLaunchd() {
 export async function restartLaunchd() {
   return run('launchctl', ['kickstart', '-k', `gui/${process.getuid()}/${LABEL}`]);
 }
+
+export async function launchdStatus() {
+  const result = await run('launchctl', ['print', `gui/${process.getuid()}/${LABEL}`], { allowFailure: true });
+  return {
+    installed: result.code === 0,
+    running: result.code === 0 && /state = running/.test(result.stdout),
+    label: LABEL,
+    plist: PLIST,
+  };
+}

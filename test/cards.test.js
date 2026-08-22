@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { configCard, historyCard, taskCard } from '../src/cards.js';
+import { configCard, fullAccessConfirmationCard, historyCard, taskCard } from '../src/cards.js';
 
 test('config card exposes dynamic models and all permission modes', () => {
   const card = configCard({
@@ -41,7 +41,16 @@ test('uses supported plain text in history div blocks', () => {
 });
 
 test('running task card uses a compact engine header without repeating prompt', () => {
-  const card = taskCard({ state: 'running', prompt: 'hi', progress: '正在分析…', config: { engine: 'codex', model: '', effort: 'high' } });
+  const card = taskCard({ state: 'running', prompt: 'hi', progress: '正在分析…', config: { engine: 'codex', model: '', effort: 'high' }, taskKey: 'chat-1' });
   assert.equal(card.header.title.content, '⏳ Codex 执行中...');
   assert.doesNotMatch(JSON.stringify(card), /\*\*任务\*\*/);
+  assert.match(JSON.stringify(card), /停止任务/);
+  assert.match(JSON.stringify(card), /chat-1/);
+});
+
+test('full access requires an explicit confirmation card', () => {
+  const card = fullAccessConfirmationCard({ workspace: '/tmp/project' });
+  assert.equal(card.header.template, 'red');
+  assert.match(JSON.stringify(card), /确认开启/);
+  assert.match(JSON.stringify(card), /danger-full-access/);
 });

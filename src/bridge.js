@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { configCard, historyCard, taskCard } from './cards.js';
+import { configCard, fullAccessConfirmationCard, historyCard, taskCard } from './cards.js';
 import { loadConfig, LOG_PATH, saveConfig } from './config.js';
 import { listCodexModels, runCodexTurn } from './codex.js';
 import { consumeEvent, replyCard, replyText, sendCard, updateCallbackCard, updateMessageCard } from './lark.js';
@@ -9,14 +9,19 @@ import { listCodexSessions } from './sessions.js';
 
 export async function startBridge() {
   let config = loadConfig();
+  const activeTasks = new Map();
   const availability = { codex: await commandExists('codex'), antigravity: await commandExists('agy') };
   const models = { codex: await listCodexModels(), antigravity: [] };
   log(`starting engine=${config.engine} codexModels=${models.codex.length}`);
 
-  const messageConsumer = consumeEvent('im.message.receive_v1', (event) => queue(() => handleMessage(event)));
-  const cardConsumer = consumeEvent('card.action.trigger', (event) => queue(() => handleCard(event)));
+  const messageConsumer = consumeEvent('im.message.receive_v1', (event) => { void handleMessage(event).catch((error) => log(error.stack || error.message)); });
+  const cardConsumer = consumeEvent('card.action.trigger', (event) => { void handleCard(event).catch((error) => log(error.stack || error.message)); });
   const children = [messageConsumer, cardConsumer];
-  const stop = () => { for (const child of children) child.kill('SIGTERM'); process.exit(0); };
+  const stop = () => {
+    for (const task of activeTasks.values()) task.controller.abort();
+    for (const child of children) child.kill('SIGTERM');
+    setTimeout(() => process.exit(0), 250).unref();
+  };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
   console.log(`Lark Agent Remote 已启动 · Codex models: ${models.codex.length} · Ctrl-C 退出`);
@@ -62,10 +67,17 @@ export async function startBridge() {
       return;
     }
 
+    const key = scope(event);
+    if (activeTasks.has(key)) {
+      await replyText(event.message_id, '当前会话已有任务正在执行。请等待完成，或点击任务卡片中的「停止任务」。');
+      return;
+    }
     const startedAt = Date.now();
-    const initialCard = taskCard({ state: 'running', prompt: text, config });
+    const initialCard = taskCard({ state: 'running', prompt: text, config, taskKey: key });
     const sent = await replyCard(event.message_id, initialCard);
     const taskMessageId = sent.message_id || sent.messageId || '';
+    const controller = new AbortController();
+    activeTasks.set(key, { controller, taskMessageId });
     let lastCardUpdateAt = 0;
     let cardUpdateChain = Promise.resolve();
     const updateProgress = async (message) => {
@@ -74,11 +86,10 @@ export async function startBridge() {
       if (!taskMessageId || now - lastCardUpdateAt < 2500) return;
       lastCardUpdateAt = now;
       cardUpdateChain = cardUpdateChain
-        .then(() => updateMessageCard(taskMessageId, taskCard({ state: 'running', prompt: text, progress: message, config })))
+        .then(() => updateMessageCard(taskMessageId, taskCard({ state: 'running', prompt: text, progress: message, config, taskKey: key })))
         .catch((error) => log(`card update ${error.message}`));
       await cardUpdateChain;
     };
-    const key = scope(event);
     const session = config.conversations[key] || {};
     try {
       const result = await runCodexTurn({
@@ -88,6 +99,7 @@ export async function startBridge() {
         permission: config.permission,
         effort: config.effort,
         threadId: session.codexThreadId,
+        signal: controller.signal,
         onProgress: (message) => { void updateProgress(message); },
       });
       config.conversations[key] = { ...session, codexThreadId: result.threadId, updatedAt: new Date().toISOString() };
@@ -99,10 +111,13 @@ export async function startBridge() {
       else await replyCard(event.message_id, completed);
     } catch (error) {
       log(`${key} error ${error.stack || error.message}`);
-      const failed = taskCard({ state: 'failed', prompt: text, answer: `执行失败：${error.message}`, config, duration: formatDuration(Date.now() - startedAt) });
+      const cancelled = error?.code === 'cancelled' || controller.signal.aborted;
+      const failed = taskCard({ state: cancelled ? 'cancelled' : 'failed', prompt: text, answer: cancelled ? '任务已停止。' : friendlyError(error), config, duration: formatDuration(Date.now() - startedAt) });
       await cardUpdateChain;
       if (taskMessageId) await updateMessageCard(taskMessageId, failed);
       else await replyCard(event.message_id, failed);
+    } finally {
+      activeTasks.delete(key);
     }
   }
 
@@ -120,7 +135,20 @@ export async function startBridge() {
     } else if (value.action === 'effort') {
       config.effort = value.value;
     } else if (value.action === 'permission') {
+      if (value.value === 'danger-full-access') {
+        if (event.token) await updateCallbackCard(event.token, fullAccessConfirmationCard(config), operator);
+        return;
+      }
       config.permission = value.value;
+    } else if (value.action === 'confirm_permission') {
+      config.permission = 'danger-full-access';
+    } else if (value.action === 'cancel_permission') {
+      if (event.token) await updateCallbackCard(event.token, configCard(config, models[config.engine] || [], availability), operator);
+      return;
+    } else if (value.action === 'cancel_task') {
+      const task = activeTasks.get(value.taskKey || event.chat_id);
+      if (task) task.controller.abort();
+      return;
     } else if (value.action === 'session' && value.value === 'new') {
       if (event.chat_id) delete config.conversations[event.chat_id];
     } else if (value.action === 'open_config') {
@@ -146,25 +174,29 @@ export async function startBridge() {
     log(`config changed ${value.action}`);
     // Settings cards update in place. Task-card actions never replace the
     // completed result with a settings UI.
-    if (event.token && ['engine', 'model', 'effort', 'permission'].includes(value.action)) {
+    if (event.token && ['engine', 'model', 'effort', 'permission', 'confirm_permission'].includes(value.action)) {
       await updateCallbackCard(event.token, configCard(config, models[config.engine] || [], availability), operator);
     }
   }
 }
 
-let chain = Promise.resolve();
-function queue(task) {
-  chain = chain.then(task).catch((error) => log(error.stack || error.message));
-}
-
 function scope(event) { return event.thread_id || event.chat_id; }
-function label(config) { return `${config.engine === 'codex' ? 'Codex' : 'Antigravity'} · ${config.model || 'default'} · ${config.effort}`; }
 function parseActionValue(value) {
   if (!value) return {};
   if (typeof value === 'object') return value;
   try { return JSON.parse(value); } catch { return {}; }
 }
 function formatDuration(ms) { return ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))}s` : `${Math.round(ms / 60_000)}m`; }
+function friendlyError(error) {
+  const message = String(error?.message || error || '未知错误');
+  if (/No such file|ENOENT|cwd/i.test(message)) return '执行失败：工作目录不存在或无法访问。请使用 `/cd /有效路径` 切换目录。';
+  if (/model.*(not found|unsupported|unavailable)|unsupported.*model/i.test(message)) return '执行失败：当前模型不可用。请打开「设置」重新选择模型。';
+  if (/thread.*(not found|missing)|resume/i.test(message)) return '执行失败：历史会话无法恢复。请新建会话后重试。';
+  if (/timed out|timeout/i.test(message)) return '执行超时：Codex 在限定时间内没有完成。可以新建会话后重试。';
+  if (/permission|denied|sandbox/i.test(message)) return '执行失败：当前权限不足。请检查设置中的权限模式。';
+  if (/app-server exited|EPIPE|ECONNRESET/i.test(message)) return 'Codex 进程意外退出。Bridge 仍在运行，请直接重试。';
+  return `执行失败：${message.slice(0, 500)}`;
+}
 function statusText(config, models, availability) {
   return [
     '**Lark Agent Remote**',
